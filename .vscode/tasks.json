@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Firmware",
+      "type": "shell",
+      "command": "./compile-with-docker.sh",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean Build Firmware",
+      "type": "shell",
+      "command": "./clean-with-docker.sh",
+      "problemMatcher": []
+    },
+    {
+      "label": "Open Compiled Firmware Folder",
+      "type": "shell",
+      "command": "mkdir -p compiled-firmware && open compiled-firmware",
+      "problemMatcher": []
+    }
+  ]
+}
