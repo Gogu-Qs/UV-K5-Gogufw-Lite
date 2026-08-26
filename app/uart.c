@@ -26,7 +26,9 @@
 #include "board.h"
 #include "bsp/dp32g030/dma.h"
 #include "bsp/dp32g030/gpio.h"
-#include "driver/aes.h"
+#ifndef ENABLE_UART_CHIRP_LITE
+	#include "driver/aes.h"
+#endif
 #include "driver/backlight.h"
 #include "driver/bk4819.h"
 #include "driver/crc.h"
@@ -105,6 +107,7 @@ typedef struct {
 	} Data;
 } REPLY_051D_t;
 
+#ifndef ENABLE_UART_CHIRP_LITE
 typedef struct {
 	Header_t Header;
 	struct {
@@ -139,6 +142,10 @@ typedef struct {
 	Header_t Header;
 	uint32_t Timestamp;
 } CMD_052F_t;
+#endif
+
+#define MSG_DRAFT_EEPROM_START 0x1C00u
+#define MSG_DRAFT_EEPROM_END   0x1CC8u
 
 static const uint8_t Obfuscation[16] =
 {
@@ -155,37 +162,41 @@ static union
 	};
 } UART_Command;
 
-static uint32_t Timestamp;
 static uint16_t gUART_WriteIndex;
-static bool     bIsEncrypted = true;
+#ifndef ENABLE_UART_CHIRP_LITE
+static uint32_t Timestamp;
+static bool bIsEncrypted = true;
+#endif
 
 static void SendReply(void *pReply, uint16_t Size)
 {
 	Header_t Header;
 	Footer_t Footer;
 
-	if (bIsEncrypted)
-	{
-		uint8_t     *pBytes = (uint8_t *)pReply;
-		unsigned int i;
-		for (i = 0; i < Size; i++)
+	uint8_t *pBytes = (uint8_t *)pReply;
+	#ifdef ENABLE_UART_CHIRP_LITE
+		for (unsigned int i = 0; i < Size; i++)
 			pBytes[i] ^= Obfuscation[i % 16];
-	}
+	#else
+		if (bIsEncrypted)
+			for (unsigned int i = 0; i < Size; i++)
+				pBytes[i] ^= Obfuscation[i % 16];
+	#endif
 
 	Header.ID = 0xCDAB;
 	Header.Size = Size;
 	UART_Send(&Header, sizeof(Header));
 	UART_Send(pReply, Size);
 
-	if (bIsEncrypted)
+	#ifndef ENABLE_UART_CHIRP_LITE
+		if (!bIsEncrypted) {
+			Footer.Padding[0] = 0xFF;
+			Footer.Padding[1] = 0xFF;
+		} else
+	#endif
 	{
 		Footer.Padding[0] = Obfuscation[(Size + 0) % 16] ^ 0xFF;
 		Footer.Padding[1] = Obfuscation[(Size + 1) % 16] ^ 0xFF;
-	}
-	else
-	{
-		Footer.Padding[0] = 0xFF;
-		Footer.Padding[1] = 0xFF;
 	}
 	Footer.ID = 0xBADC;
 
@@ -194,21 +205,24 @@ static void SendReply(void *pReply, uint16_t Size)
 
 static void SendVersion(void)
 {
-	REPLY_0514_t Reply;
+	REPLY_0514_t Reply = {0};
 
 	Reply.Header.ID = 0x0515;
 	Reply.Header.Size = sizeof(Reply.Data);
 	strcpy(Reply.Data.Version, Version);
-	Reply.Data.bHasCustomAesKey = bHasCustomAesKey;
-	Reply.Data.bIsInLockScreen = bIsInLockScreen;
-	Reply.Data.Challenge[0] = gChallenge[0];
-	Reply.Data.Challenge[1] = gChallenge[1];
-	Reply.Data.Challenge[2] = gChallenge[2];
-	Reply.Data.Challenge[3] = gChallenge[3];
+	#ifndef ENABLE_UART_CHIRP_LITE
+		Reply.Data.bHasCustomAesKey = bHasCustomAesKey;
+		Reply.Data.bIsInLockScreen = bIsInLockScreen;
+		Reply.Data.Challenge[0] = gChallenge[0];
+		Reply.Data.Challenge[1] = gChallenge[1];
+		Reply.Data.Challenge[2] = gChallenge[2];
+		Reply.Data.Challenge[3] = gChallenge[3];
+	#endif
 
 	SendReply(&Reply, sizeof(Reply));
 }
 
+#ifndef ENABLE_UART_CHIRP_LITE
 static bool IsBadChallenge(const uint32_t *pKey, const uint32_t *pIn, const uint32_t *pResponse)
 {
 	unsigned int i;
@@ -227,23 +241,27 @@ static bool IsBadChallenge(const uint32_t *pKey, const uint32_t *pIn, const uint
 
 	return false;
 }
+#endif
 
 // session init, sends back version info and state
 // timestamp is a session id really
 static void CMD_0514(const uint8_t *pBuffer)
 {
-	const CMD_0514_t *pCmd = (const CMD_0514_t *)pBuffer;
-
-	Timestamp = pCmd->Timestamp;
-
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+	#ifdef ENABLE_UART_CHIRP_LITE
+		(void)pBuffer;
+	#else
+		const CMD_0514_t *pCmd = (const CMD_0514_t *)pBuffer;
+		Timestamp = pCmd->Timestamp;
 	#endif
 
 	gSerialConfigCountDown_500ms = 12; // 6 sec
-	
-	// turn the LCD backlight off
-	BACKLIGHT_TurnOff();
+
+	#ifndef ENABLE_UART_CHIRP_LITE
+		#ifdef ENABLE_FMRADIO
+			gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+		#endif
+		BACKLIGHT_TurnOff();
+	#endif
 
 	SendVersion();
 }
@@ -253,28 +271,34 @@ static void CMD_051B(const uint8_t *pBuffer)
 {
 	const CMD_051B_t *pCmd = (const CMD_051B_t *)pBuffer;
 	REPLY_051B_t      Reply;
-	bool              bLocked = false;
-
-	if (pCmd->Timestamp != Timestamp)
-		return;
+	#ifndef ENABLE_UART_CHIRP_LITE
+		if (pCmd->Timestamp != Timestamp)
+			return;
+	#endif
 
 	gSerialConfigCountDown_500ms = 12; // 6 sec
 
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+	#ifndef ENABLE_UART_CHIRP_LITE
+		#ifdef ENABLE_FMRADIO
+			gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+		#endif
 	#endif
 
-	memset(&Reply, 0, sizeof(Reply));
 	Reply.Header.ID   = 0x051C;
 	Reply.Header.Size = pCmd->Size + 4;
 	Reply.Data.Offset = pCmd->Offset;
 	Reply.Data.Size   = pCmd->Size;
+	Reply.Data.Padding = 0;
 
-	if (bHasCustomAesKey)
-		bLocked = gIsLocked;
-
-	if (!bLocked)
+	#ifdef ENABLE_UART_CHIRP_LITE
 		EEPROM_ReadBuffer(pCmd->Offset, Reply.Data.Data, pCmd->Size);
+	#else
+		bool bLocked = false;
+		if (bHasCustomAesKey)
+			bLocked = gIsLocked;
+		if (!bLocked)
+			EEPROM_ReadBuffer(pCmd->Offset, Reply.Data.Data, pCmd->Size);
+	#endif
 
 	SendReply(&Reply, pCmd->Size + 8);
 }
@@ -284,48 +308,76 @@ static void CMD_051D(const uint8_t *pBuffer)
 {
 	const CMD_051D_t *pCmd = (const CMD_051D_t *)pBuffer;
 	REPLY_051D_t Reply;
-	bool bReloadEeprom;
-	bool bIsLocked;
-
-	if (pCmd->Timestamp != Timestamp)
-		return;
+	#ifndef ENABLE_UART_CHIRP_LITE
+		if (pCmd->Timestamp != Timestamp)
+			return;
+	#endif
+	#ifndef ENABLE_UART_CHIRP_LITE
+		bool bReloadEeprom;
+		bool bIsLocked;
+	#endif
 
 	gSerialConfigCountDown_500ms = 12; // 6 sec
 	
-	bReloadEeprom = false;
+	#ifndef ENABLE_UART_CHIRP_LITE
+		bReloadEeprom = false;
+	#endif
 
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+	#ifndef ENABLE_UART_CHIRP_LITE
+		#ifdef ENABLE_FMRADIO
+			gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
+		#endif
 	#endif
 
 	Reply.Header.ID   = 0x051E;
 	Reply.Header.Size = sizeof(Reply.Data);
 	Reply.Data.Offset = pCmd->Offset;
 
-	bIsLocked = bHasCustomAesKey ? gIsLocked : bHasCustomAesKey;
-
-	if (!bIsLocked)
+	#ifndef ENABLE_UART_CHIRP_LITE
+		bIsLocked = bHasCustomAesKey ? gIsLocked : bHasCustomAesKey;
+		if (!bIsLocked)
+	#endif
 	{
-		unsigned int i;
-		for (i = 0; i < (pCmd->Size / 8); i++)
+		for (uint8_t i = 0;
+		     i < pCmd->Size
+		#ifdef ENABLE_UART_CHIRP_LITE
+		     && (uint16_t)(pCmd->Offset + i) < MSG_DRAFT_EEPROM_START
+		#endif
+		     ; i += 8u)
 		{
-			const uint16_t Offset = pCmd->Offset + (i * 8U);
+			const uint16_t Offset = pCmd->Offset + i;
 
-			if (Offset >= 0x0F30 && Offset < 0x0F40)
-				if (!gIsLocked)
-					bReloadEeprom = true;
+			#ifndef ENABLE_UART_CHIRP_LITE
+			/* Standard UV-K5 CHIRP images use 0x1C00 for DTMF contacts.
+			 * GOGUFW Lite uses it for Messenger drafts, so never let a
+			 * generic channel upload silently erase those drafts. */
+			if ((uint16_t)(Offset - MSG_DRAFT_EEPROM_START) <
+			    (MSG_DRAFT_EEPROM_END - MSG_DRAFT_EEPROM_START))
+				continue;
+			#endif
 
-			if ((Offset < 0x0E98 || Offset >= 0x0EA0) || !bIsInLockScreen || pCmd->bAllowPassword)
-				EEPROM_WriteBuffer(Offset, &pCmd->Data[i * 8U]);
+			#ifdef ENABLE_UART_CHIRP_LITE
+				EEPROM_WriteBuffer(Offset, &pCmd->Data[i]);
+			#else
+				if (Offset >= 0x0F30 && Offset < 0x0F40)
+					if (!gIsLocked)
+						bReloadEeprom = true;
+
+				if ((Offset < 0x0E98 || Offset >= 0x0EA0) || !bIsInLockScreen || pCmd->bAllowPassword)
+					EEPROM_WriteBuffer(Offset, &pCmd->Data[i]);
+			#endif
 		}
 
-		if (bReloadEeprom)
-			SETTINGS_InitEEPROM();
+		#ifndef ENABLE_UART_CHIRP_LITE
+			if (bReloadEeprom)
+				SETTINGS_InitEEPROM();
+		#endif
 	}
 
 	SendReply(&Reply, sizeof(Reply));
 }
 
+#ifndef ENABLE_UART_CHIRP_LITE
 // read RSSI
 static void CMD_0527(void)
 {
@@ -433,6 +485,7 @@ static void CMD_052F(const uint8_t *pBuffer)
 
 	SendVersion();
 }
+#endif
 
 #ifdef ENABLE_UART_RW_BK_REGS
 static void CMD_0601_ReadBK4819Reg(const uint8_t *pBuffer)
@@ -474,12 +527,8 @@ static void CMD_0602_WriteBK4819Reg(const uint8_t *pBuffer)
 
 bool UART_IsCommandAvailable(void)
 {
-	uint16_t Index;
-	uint16_t TailIndex;
-	uint16_t Size;
-	uint16_t CRC;
+	const uint16_t DmaLength = DMA_CH0->ST & 0xFFFU;
 	uint16_t CommandLength;
-	uint16_t DmaLength = DMA_CH0->ST & 0xFFFU;
 
 	while (1)
 	{
@@ -506,8 +555,8 @@ bool UART_IsCommandAvailable(void)
 		gUART_WriteIndex = DMA_INDEX(gUART_WriteIndex, 1);
 	}
 
-	Index = DMA_INDEX(gUART_WriteIndex, 2);
-	Size  = (UART_DMA_Buffer[DMA_INDEX(Index, 1)] << 8) | UART_DMA_Buffer[Index];
+	uint16_t Index = DMA_INDEX(gUART_WriteIndex, 2);
+	const uint16_t Size = (UART_DMA_Buffer[DMA_INDEX(Index, 1)] << 8) | UART_DMA_Buffer[Index];
 
 	if ((Size + 8u) > sizeof(UART_DMA_Buffer))
 	{
@@ -518,49 +567,28 @@ bool UART_IsCommandAvailable(void)
 	if (CommandLength < (Size + 8))
 		return false;
 
-	Index     = DMA_INDEX(Index, 2);
-	TailIndex = DMA_INDEX(Index, Size + 2);
+	Index = DMA_INDEX(Index, 2);
+	const uint16_t TailIndex = DMA_INDEX(Index, Size + 2);
 
-	if (UART_DMA_Buffer[TailIndex] != 0xDC || UART_DMA_Buffer[DMA_INDEX(TailIndex, 1)] != 0xBA)
-	{
-		gUART_WriteIndex = DmaLength;
-		return false;
-	}
+	#ifdef ENABLE_UART_CHIRP_LITE
+		for (uint16_t i = 0; i < (Size + 2u); i++)
+			UART_Command.Buffer[i] = UART_DMA_Buffer[DMA_INDEX(Index, i)] ^ Obfuscation[i % 16];
+	#else
+		for (uint16_t i = 0; i < (Size + 2u); i++)
+			UART_Command.Buffer[i] = UART_DMA_Buffer[DMA_INDEX(Index, i)];
 
-	if (TailIndex < Index)
-	{
-		const uint16_t ChunkSize = sizeof(UART_DMA_Buffer) - Index;
-		memcpy(UART_Command.Buffer, UART_DMA_Buffer + Index, ChunkSize);
-		memcpy(UART_Command.Buffer + ChunkSize, UART_DMA_Buffer, TailIndex);
-	}
-	else
-		memcpy(UART_Command.Buffer, UART_DMA_Buffer + Index, TailIndex - Index);
+		if (UART_Command.Header.ID == 0x0514)
+			bIsEncrypted = false;
+		if (UART_Command.Header.ID == 0x6902)
+			bIsEncrypted = true;
+		if (bIsEncrypted)
+			for (uint16_t i = 0; i < (Size + 2u); i++)
+				UART_Command.Buffer[i] ^= Obfuscation[i % 16];
+	#endif
 
-	TailIndex = DMA_INDEX(TailIndex, 2);
-	if (TailIndex < gUART_WriteIndex)
-	{
-		memset(UART_DMA_Buffer + gUART_WriteIndex, 0, sizeof(UART_DMA_Buffer) - gUART_WriteIndex);
-		memset(UART_DMA_Buffer, 0, TailIndex);
-	}
-	else
-		memset(UART_DMA_Buffer + gUART_WriteIndex, 0, TailIndex - gUART_WriteIndex);
+	gUART_WriteIndex = DMA_INDEX(TailIndex, 2);
 
-	gUART_WriteIndex = TailIndex;
-
-	if (UART_Command.Header.ID == 0x0514)
-		bIsEncrypted = false;
-
-	if (UART_Command.Header.ID == 0x6902)
-		bIsEncrypted = true;
-
-	if (bIsEncrypted)
-	{
-		unsigned int i;
-		for (i = 0; i < (Size + 2u); i++)
-			UART_Command.Buffer[i] ^= Obfuscation[i % 16];
-	}
-	
-	CRC = UART_Command.Buffer[Size] | (UART_Command.Buffer[Size + 1] << 8);
+	const uint16_t CRC = UART_Command.Buffer[Size] | (UART_Command.Buffer[Size + 1] << 8);
 
 	return (CRC_Calculate(UART_Command.Buffer, Size) != CRC) ? false : true;
 }
@@ -581,12 +609,7 @@ void UART_HandleCommand(void)
 			CMD_051D(UART_Command.Buffer);
 			break;
 	
-		case 0x051F:	// Not implementing non-authentic command
-			break;
-	
-		case 0x0521:	// Not implementing non-authentic command
-			break;
-	
+		#ifndef ENABLE_UART_CHIRP_LITE
 		case 0x0527:
 			CMD_0527();
 			break;
@@ -602,6 +625,7 @@ void UART_HandleCommand(void)
 		case 0x052F:
 			CMD_052F(UART_Command.Buffer);
 			break;
+		#endif
 	
 		case 0x05DD: // reset
 			#if defined(ENABLE_OVERLAY)

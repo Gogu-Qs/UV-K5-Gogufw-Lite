@@ -230,7 +230,11 @@ static void draw_list(void)
         const char *text = (sc == MSG_SCREEN_DRAFTS) ? MSG_GetDraft(idx) : MSG_GetListText(idx);
         uint8_t p = 0u;
         if (sc == MSG_SCREEN_DRAFTS) { buf[p++] = (char)('1' + idx); buf[p++] = ' '; }
-        else if (sc == MSG_SCREEN_SENT) { MSG_Status_t st = MSG_GetSentStatus(idx); buf[p++] = (st == MSG_STATUS_ACKED) ? '+' : ((st == MSG_STATUS_FAILED) ? 'x' : '?'); }
+        else if (sc == MSG_SCREEN_SENT) {
+            MSG_Status_t st = MSG_GetSentStatus(idx);
+            if (st != MSG_STATUS_NONE)
+                buf[p++] = (st == MSG_STATUS_ACKED) ? '+' : ((st == MSG_STATUS_FAILED) ? 'x' : '?');
+        }
         else buf[p++] = MSG_GetInboxUnread(idx) ? '*' : ' ';
         for (uint8_t j = 0u; text[j] && p < 12u; j++) buf[p++] = text[j];
         if (sc != MSG_SCREEN_DRAFTS) { char a[5]; age(MSG_GetListAge(idx), a); uint8_t al = (uint8_t)strlen(a); uint8_t start = (al >= 4u) ? 14u : (uint8_t)(18u - al); for (uint8_t j = 0u; j < al && start + j < 18u; j++) buf[start + j] = a[j]; }
@@ -260,7 +264,13 @@ static void draw_read(void)
         append(meta, agebuf, sizeof(meta));
         small3(meta, 0u, 9u, false);
     }
-    if (sent) { char st[2]; MSG_Status_t s = MSG_GetReadStatus(); st[0] = (s == MSG_STATUS_ACKED) ? '+' : ((s == MSG_STATUS_FAILED) ? 'x' : '?'); st[1] = 0; UI_PrintStringSmallBold(st, 120, 0, 1); }
+    if (sent) {
+        char st[2];
+        MSG_Status_t s = MSG_GetReadStatus();
+        st[0] = (s == MSG_STATUS_NONE) ? 0 : ((s == MSG_STATUS_ACKED) ? '+' : ((s == MSG_STATUS_FAILED) ? 'x' : '?'));
+        st[1] = 0;
+        if (st[0]) UI_PrintStringSmallBold(st, 120, 0, 1);
+    }
     draw_dots(17u);
     wrap_y(MSG_GetReadText(), 20u, 3u);
     draw_dots(46u);
@@ -367,7 +377,7 @@ static void draw_callsign(void)
 
 static void draw_settings(void)
 {
-    static const char *names[] = { "MSG RX:ON", "MSG CSG", "CALLTX:ON", "ACK:ON", "HOP:OFF", "BEEP:ON", "LED:1", "DEBUG:OFF", "BACK" };
+    static const char *names[] = { "MSG RX:ON", "MSG CSG", "CALLTX:ON", "ACK:ON", "HOP:OFF", "BEEP:ON", "LED:1", "BACK" };
     title("MSG SET");
     uint8_t cur = MSG_GetSettingsCursor();
     uint8_t start = (cur >= 5u) ? (uint8_t)(cur - 4u) : 0u;

@@ -6,7 +6,11 @@
 # This profile disables non-essential features to measure remaining FLASH/RAM
 # before attempting a Messenger / Range Check port.
 
+VERSION_STRING=1.0.1
+
 ENABLE_AIRCOPY=0
+ENABLE_UART=1
+ENABLE_UART_CHIRP_LITE=1
 ENABLE_FMRADIO=1
 ENABLE_NOAA=0
 ENABLE_VOICE=0

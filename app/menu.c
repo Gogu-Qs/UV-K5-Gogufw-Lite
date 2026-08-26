@@ -280,7 +280,6 @@ int MENU_GetLimits(uint8_t menu_id, int32_t *pMin, int32_t *pMax)
 		case MENU_MSG_ACK:
 		case MENU_MSG_BEEP:
 		case MENU_MSG_RSP:
-		case MENU_MSG_DEBUG:
 #endif
 			*pMin = 0;
 			*pMax = ARRAY_SIZE(gSubMenu_OFF_ON) - 1;
@@ -460,10 +459,6 @@ void MENU_AcceptSetting(void)
 			return;
 		case MENU_MSG_RSP:
 			gMessengerRangeRsp = gSubMenuSelection != 0;
-			MSG_SaveConfigNow();
-			return;
-		case MENU_MSG_DEBUG:
-			gMessengerDebug = gSubMenuSelection != 0;
 			MSG_SaveConfigNow();
 			return;
 		case MENU_MSG_HOP:
@@ -953,9 +948,6 @@ void MENU_ShowCurrentSetting(void)
 			break;
 		case MENU_MSG_RSP:
 			gSubMenuSelection = gMessengerRangeRsp ? 1 : 0;
-			break;
-		case MENU_MSG_DEBUG:
-			gSubMenuSelection = gMessengerDebug ? 1 : 0;
 			break;
 		case MENU_MSG_HOP:
 			gSubMenuSelection = gMessengerHop;

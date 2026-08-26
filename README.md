@@ -1,52 +1,57 @@
-GOGUFW UV-K5 Messenger
+# GOGUFW Lite 1.0.1 for Quansheng UV-K5
 
-GOGUFW UV-K5 Messenger is the UV-K5 port of the GOGUFW Messenger project originally developed for the UV-K1 platform.
+GOGUFW Lite brings the GOGUFW Messenger experience to the Quansheng UV-K5. It is designed primarily for reliable text messaging, ACK/retry handling, Range Check and compatibility with GOGUFW UV-K1 radios.
 
-The primary goal of this project is to provide reliable text messaging and range-check capabilities while maintaining compatibility with the user experience, protocol behavior, and feature set of the UV-K1 GOGUFW firmware whenever possible.
+## What is new in 1.0.1
 
-Project Philosophy
+- Improved first-message reception when the receiving radio is in power save.
+- Added an invisible wake preamble before the first text-message attempt; retries remain normal message packets.
+- Kept the radio on the correct channel while waiting for message ACKs and Range Check PONG results, including when Dual Watch is enabled.
+- Range Check now keeps its full 12-second collection window while showing incoming results immediately.
+- Added an ACK queue so closely timed replies are handled more reliably.
+- Fixed Sent showing the previous message text after sending a new quick message.
+- Added CHIRP support with a dedicated **Quansheng / UV-K5 GOGUFW Lite / 1.0.1** module.
+- Preserved the flashlight while reducing its firmware footprint.
+- Added `GOGUFW LITE` and `1.0.1` identification to the startup screen without replacing the user's two custom startup lines.
 
-Unlike many custom UV-K5 firmware projects, this firmware prioritizes:
+## Main features
 
-* Reliable Messenger operation
-* Reliable ACK handling
-* Reliable Range Check functionality
-* Cross-device compatibility with GOGUFW UV-K1
-* Stable operation over feature count
+- GOGUFW text Messenger with Inbox, Sent and Drafts
+- ACK confirmation and automatic retry
+- HEARD list
+- Range Check with multiple PONG results, RSSI and battery voltage
+- Cross-device messaging with GOGUFW UV-K1
+- FM radio
+- Flashlight
 
-Several original UV-K5 features have been removed to free Flash and RAM resources required by Messenger and Range Check.
+## Downloads
 
-Removed Features
+Download the firmware and CHIRP module from the [GOGUFW Lite 1.0.1 release](https://github.com/Gogu-Qs/UV-K5-Gogufw-Lite/releases/tag/v1.0.1).
 
-The following features were intentionally removed to make room for Messenger-related functionality:
+- `GOGUFW_LITE_UV-K5_1.0.1.packed.bin`: for flashers that expect the packed Quansheng firmware format.
+- `GOGUFW_LITE_UV-K5_1.0.1.bin`: raw firmware image for tools that explicitly require a raw binary.
+- `UV-K5_GOGUFW_Lite_1.0.1_chirp_module.py`: custom CHIRP module.
 
-* Spectrum Analyzer
-* Games
-* Screenshot Utility
-* NOAA Weather
-* Aircopy
-* Voice Features
-* Alarm
-* VOX
-* DTMF (optional, depending on build)
+Always back up your radio and calibration data before flashing custom firmware.
 
-FM Radio support is intentionally retained.
+## CHIRP
 
-Compatibility
+The custom module appears under:
 
-This firmware aims to remain protocol-compatible with GOGUFW UV-K1 Messenger whenever possible.
+- **Vendor:** Quansheng
+- **Model:** UV-K5 GOGUFW Lite
+- **Variant:** 1.0.1
 
-Supported functionality includes:
+Follow the [CHIRP installation and safety instructions](CHIRP.md). The module intentionally uploads only the normal channel/settings area and does not overwrite the GOGUFW Drafts storage or calibration area.
 
-* Text Messaging
-* ACK Confirmation
-* Automatic Retries
-* Range Check
-* Heard List
-* Call Sign Exchange
+## Compatibility
 
-Disclaimer
+Version 1.0.1 keeps the established GOGUFW packet format and is intended to communicate with the matching GOGUFW UV-K1 Messenger implementation. The wake preamble is invisible to the Inbox and does not change normal message, ACK, ping or pong packet formats.
 
-This project is experimental and provided without warranty.
+## Lite build
 
-Always keep a backup of your original firmware before flashing custom firmware.
+Flash and RAM are limited on the UV-K5, so this edition focuses on Messenger reliability instead of feature count. Spectrum Analyzer, games, screenshot utility, NOAA Weather, Aircopy, voice features, alarm and VOX are not included. FM radio and the flashlight remain available.
+
+## Disclaimer
+
+This is experimental third-party firmware and is provided without warranty. Flashing custom firmware is at your own risk.

@@ -140,7 +140,6 @@ const t_menu_item MenuList[] =
 	// hidden menu items from here on
 	// enabled if pressing both the PTT and upper side button at power-on
 #ifdef ENABLE_GOGUFW_MESSENGER
-	{"MsgDbg", VOICE_ID_INVALID,                       MENU_MSG_DEBUG     },
 	{"MsgHop", VOICE_ID_INVALID,                       MENU_MSG_HOP       },
 #endif
 	{"F Lock", VOICE_ID_INVALID,                       MENU_F_LOCK        },
@@ -160,7 +159,7 @@ const t_menu_item MenuList[] =
 };
 
 #ifdef ENABLE_GOGUFW_MESSENGER
-const uint8_t FIRST_HIDDEN_MENU_ITEM = MENU_MSG_DEBUG;
+const uint8_t FIRST_HIDDEN_MENU_ITEM = MENU_MSG_HOP;
 #else
 const uint8_t FIRST_HIDDEN_MENU_ITEM = MENU_F_LOCK;
 #endif
@@ -660,7 +659,6 @@ void UI_DisplayMenu(void)
 		case MENU_MSG_ACK:
 		case MENU_MSG_BEEP:
 		case MENU_MSG_RSP:
-		case MENU_MSG_DEBUG:
 #endif
 			strcpy(String, gSubMenu_OFF_ON[gSubMenuSelection]);
 			break;

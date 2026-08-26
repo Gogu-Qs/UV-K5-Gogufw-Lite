@@ -19,7 +19,7 @@
 
 #define MSG_SENT_CAPACITY 8u
 #define MSG_INBOX_CAPACITY 8u
-#define MSG_SETTINGS_COUNT 9u
+#define MSG_SETTINGS_COUNT 8u
 
 #define MSG_FSK_WORDS       50u
 #define MSG_PKT_WIRE_LEN    94u
@@ -32,6 +32,7 @@
 #define MSG_TYPE_ACK        2u
 #define MSG_TYPE_PING       3u
 #define MSG_TYPE_PONG       4u
+#define MSG_TYPE_WAKE       5u
 #define MSG_PKT_TO_ALL      "ALL"
 #define MSG_PKT_CALLSIGN_FIELD_LEN 8u /* UV-K1 0.6.5 RF field width; UI edit remains 6 chars */
 #define MSG_RF_REG5D_LEN_100_BYTES    0x6300u
@@ -126,19 +127,22 @@ bool gMessengerAck = true;
 uint8_t gMessengerHop = 0u;
 bool gMessengerBeep = true;
 uint8_t gMessengerLed = 1u;
-bool gMessengerDebug = false;
 
 static uint16_t gMsgTxBuf[MSG_FSK_WORDS];
 static uint16_t gMsgNextId = 1u;
 
 /* RF10 safety scheduler: keep RF7b TX path, do not enable FSK RX/stock RX hooks.
    This only fixes UI sent status timing (? -> retry -> x) without touching voice RX. */
-#define MSG_ACK_WAIT_10MS      400u /* UV-K1 0.6.5: 4.0s */
+#define MSG_ACK_WAIT_10MS      600u /* UV-K1 GOGUFW: 6.0s, includes delayed ACK airtime */
 #define MSG_ACK_DELAY_MIN_10MS  80u  /* UV-K1: delayed ACK, 800ms minimum */
 #define MSG_ACK_DELAY_JIT_10MS 220u  /* +0..2.2s jitter => 0.8..3.0s */
 #define MSG_RANGE_PONG_MIN_10MS 300u /* UV-K1: 3s minimum PONG delay */
 #define MSG_RANGE_PONG_JIT_10MS 500u /* +0..5s jitter => 3..8s */
 #define MSG_REPEAT_GAP_MS       100u
+#define MSG_INITIAL_WAKE_REPEATS 1u
+#define MSG_INITIAL_WAKE_GAP_MS 120u
+#define MSG_ACK_QUEUE_LEN          4u
+#define MSG_FSK_SYNC_HOLD_10MS    200u
 
 static bool gMsgAckPending;
 static bool gMsgAckRetried;
@@ -146,17 +150,27 @@ static uint16_t gMsgAckWait10ms;
 static uint16_t gMsgWaitAckId;
 static char gMsgAckText[MSG_TEXT_LEN + 1u];
 
-static bool gPendingAckActive;
-static uint16_t gPendingAckDelay10ms;
-static uint16_t gPendingAckId;
-static char gPendingAckTo[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
-static uint8_t gPendingAckVfo = 0xFFu;
+typedef struct {
+    bool active;
+    uint16_t delay10ms;
+    uint16_t id;
+    char to[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
+    uint8_t vfo;
+} MSG_PendingAck_t;
+
+static MSG_PendingAck_t gPendingAckQueue[MSG_ACK_QUEUE_LEN];
 
 static bool gPendingPongActive;
 static uint16_t gPendingPongDelay10ms;
 static uint16_t gPendingPongId;
 static char gPendingPongTo[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
 static uint8_t gPendingPongVfo = 0xFFu;
+
+static bool gResponseLockActive;
+static uint8_t gResponseLockVfo;
+static uint8_t gResponseLockOldRxVfo;
+static bool gResponseLockOldDualWatchActive;
+static uint16_t gFskSyncHold10ms;
 
 #define MSG_SEEN_CACHE 8u
 typedef struct { char from[MSG_PKT_CALLSIGN_FIELD_LEN + 1u]; uint16_t id; uint8_t type; } MSG_Seen_t;
@@ -176,10 +190,14 @@ static void add_heard(const char *from, int16_t rssi_dbm, uint16_t voltage_cv, u
 static void request_messenger_redraw(void);
 static void MSG_RFSendRepeat(uint8_t type, const char *text, uint16_t id, const char *to, uint8_t count, uint16_t gap_ms);
 static void MSG_RFSendRepeatOnVfo(uint8_t type, const char *text, uint16_t id, const char *to, uint8_t count, uint16_t gap_ms, uint8_t tx_vfo);
-static void MSG_QueueAck(uint16_t id, const char *to);
-static void MSG_QueuePong(uint16_t id, const char *to);
+static void MSG_QueueAck(uint16_t id, const char *to, uint8_t rx_vfo);
+static void MSG_QueuePong(uint16_t id, const char *to, uint8_t rx_vfo);
 static uint16_t MSG_Jitter(uint16_t seed, uint16_t span);
 static int16_t MSG_CurrentRSSIdBm(void);
+static void MSG_ResponseLockStart(uint8_t vfo, uint16_t ticks);
+static void MSG_ResponseLockStop(void);
+static void MSG_ResponseLockMaintain(uint16_t ticks);
+static void MSG_FskSyncHoldStart(uint8_t vfo);
 
 static void MSG_SaveDrafts(void)
 {
@@ -230,8 +248,7 @@ static void MSG_SaveConfig(void)
               | (gMessengerRangeRsp ? 0x02u : 0u)
               | (gMessengerCallsignTx ? 0x04u : 0u)
               | (gMessengerAck ? 0x08u : 0u)
-              | (gMessengerBeep ? 0x10u : 0u)
-              | (gMessengerDebug ? 0x20u : 0u);
+              | (gMessengerBeep ? 0x10u : 0u);
     block0[5] = (gMessengerLed <= 2u) ? gMessengerLed : 1u;
     block0[6] = (gMessengerHop <= 5u) ? gMessengerHop : 0u;
     block0[7] = 0xA5u;
@@ -257,7 +274,6 @@ void MSG_LoadConfig(void)
     gMessengerCallsignTx = (block0[4] & 0x04u) != 0u;
     gMessengerAck        = (block0[4] & 0x08u) != 0u;
     gMessengerBeep       = (block0[4] & 0x10u) != 0u;
-    gMessengerDebug      = (block0[4] & 0x20u) != 0u;
     gMessengerLed        = (block0[5] <= 2u) ? block0[5] : 1u;
     gMessengerHop        = (block0[6] <= 5u) ? block0[6] : 0u;
 
@@ -322,10 +338,71 @@ static uint16_t MSG_Jitter(uint16_t seed, uint16_t span)
 {
     if (span == 0u) return 0u;
     uint16_t x = (uint16_t)(seed ^ gMsgNextId ^ (uint16_t)gMsgAgeSubTicks ^ 0x5A3Cu);
+    for (uint8_t i = 0u; i < MSG_CALLSIGN_LEN && gCallsign[i]; i++) {
+        x ^= (uint16_t)((uint16_t)(uint8_t)gCallsign[i] << ((i & 1u) ? 8u : 0u));
+    }
     x ^= (uint16_t)(x << 7);
     x ^= (uint16_t)(x >> 9);
     x ^= (uint16_t)(x << 8);
     return (uint16_t)(x % span);
+}
+
+static void MSG_ResponseLockStart(uint8_t vfo, uint16_t ticks)
+{
+    vfo &= 1u;
+    if (!gResponseLockActive) {
+        gResponseLockOldRxVfo = (uint8_t)(gEeprom.RX_VFO & 1u);
+        gResponseLockOldDualWatchActive = gDualWatchActive;
+    }
+
+    gResponseLockActive = true;
+    gResponseLockVfo = vfo;
+    if ((gEeprom.RX_VFO & 1u) != vfo) {
+        gEeprom.RX_VFO = vfo;
+        gRxVfo = &gEeprom.VfoInfo[vfo];
+        RADIO_SetupRegisters(false);
+    }
+
+    gScheduleDualWatch = false;
+    gDualWatchCountdown_10ms = ticks ? ticks : 1u;
+    gDualWatchActive = false;
+}
+
+static void MSG_ResponseLockStop(void)
+{
+    if (!gResponseLockActive) return;
+
+    gResponseLockActive = false;
+    if ((gEeprom.RX_VFO & 1u) != (gResponseLockOldRxVfo & 1u)) {
+        gEeprom.RX_VFO = (uint8_t)(gResponseLockOldRxVfo & 1u);
+        gRxVfo = &gEeprom.VfoInfo[gEeprom.RX_VFO];
+        RADIO_SetupRegisters(false);
+    }
+    gDualWatchActive = gResponseLockOldDualWatchActive;
+    gScheduleDualWatch = false;
+}
+
+static void MSG_ResponseLockMaintain(uint16_t ticks)
+{
+    if (!gResponseLockActive) return;
+
+    if ((gEeprom.RX_VFO & 1u) != (gResponseLockVfo & 1u)) {
+        gEeprom.RX_VFO = (uint8_t)(gResponseLockVfo & 1u);
+        gRxVfo = &gEeprom.VfoInfo[gEeprom.RX_VFO];
+        RADIO_SetupRegisters(false);
+    }
+    gScheduleDualWatch = false;
+    gDualWatchCountdown_10ms = ticks ? ticks : 1u;
+    gDualWatchActive = false;
+}
+
+static void MSG_FskSyncHoldStart(uint8_t vfo)
+{
+    if (gMsgAckPending || gMsgRangeStatus == 1u) return;
+
+    gFskSyncHold10ms = MSG_FSK_SYNC_HOLD_10MS;
+    if (!gResponseLockActive || gResponseLockVfo == (vfo & 1u))
+        MSG_ResponseLockStart(vfo, gFskSyncHold10ms);
 }
 
 static int16_t MSG_CurrentRSSIdBm(void)
@@ -518,6 +595,7 @@ static void ack_sent_id(uint16_t ack_id)
         gMsgAckPending = false;
         gMsgAckRetried = false;
         gMsgAckWait10ms = 0u;
+        MSG_ResponseLockStop();
     }
     redraw();
 }
@@ -544,7 +622,8 @@ static void MSG_HandlePacketBytes(const uint8_t *raw, uint8_t len)
     if (!pkt) return;
     if (pkt[0] != MSG_PKT_MAGIC0 || pkt[1] != MSG_PKT_MAGIC1 || pkt[2] != MSG_PKT_MAGIC2 || pkt[3] != MSG_PKT_MAGIC3) return;
     if (pkt[4] != MSG_PKT_VERSION) return;
-    if (pkt[5] != MSG_TYPE_TEXT && pkt[5] != MSG_TYPE_ACK && pkt[5] != MSG_TYPE_PING && pkt[5] != MSG_TYPE_PONG) return;
+    if (pkt[5] != MSG_TYPE_TEXT && pkt[5] != MSG_TYPE_ACK && pkt[5] != MSG_TYPE_PING &&
+        pkt[5] != MSG_TYPE_PONG && pkt[5] != MSG_TYPE_WAKE) return;
     if (pkt[27] > MSG_TEXT_LEN) return;
     uint16_t inner = (uint16_t)pkt[MSG_PKT_WIRE_LEN - 2u] | ((uint16_t)pkt[MSG_PKT_WIRE_LEN - 1u] << 8);
     if (inner != msg_crc16(pkt, MSG_PKT_WIRE_LEN - 2u)) return;
@@ -555,7 +634,11 @@ static void MSG_HandlePacketBytes(const uint8_t *raw, uint8_t len)
     char from[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
     copy_wire_cstr(from, MSG_PKT_CALLSIGN_FIELD_LEN, &pkt[11], MSG_PKT_CALLSIGN_FIELD_LEN);
 
-    if (type == MSG_TYPE_ACK) {
+    if (type == MSG_TYPE_WAKE) {
+        /* Invisible Power Save lead-in. It must not enter HEARD/Inbox or
+           generate ACK/PONG traffic. The next frame carries the real TEXT. */
+        return;
+    } else if (type == MSG_TYPE_ACK) {
         uint16_t ack_id = id;
         if (pkt[27] >= 2u) ack_id = (uint16_t)pkt[28] | ((uint16_t)pkt[29] << 8);
         add_heard(from, MSG_CurrentRSSIdBm(), 0u, MSG_TYPE_ACK);
@@ -576,19 +659,19 @@ static void MSG_HandlePacketBytes(const uint8_t *raw, uint8_t len)
             MSG_RememberSeen(from, id, MSG_TYPE_TEXT);
             add_inbox(txt[0] ? txt : "MSG", id, from);
         }
-        if (gMessengerAck) { gPendingAckVfo = rx_vfo; MSG_QueueAck(id, from); }
+        if (gMessengerAck) MSG_QueueAck(id, from, rx_vfo);
         redraw();
     } else if (type == MSG_TYPE_PING) {
         add_heard(from, MSG_CurrentRSSIdBm(), 0u, MSG_TYPE_PING);
-        if (gMessengerRangeRsp) { gPendingPongVfo = rx_vfo; MSG_QueuePong(id, from); }
+        if (gMessengerRangeRsp) MSG_QueuePong(id, from, rx_vfo);
         redraw();
     } else if (type == MSG_TYPE_PONG) {
         uint16_t remote_cv = 0u;
         if (pkt[27] >= 2u) remote_cv = (uint16_t)pkt[28] | ((uint16_t)pkt[29] << 8);
         add_heard(from, MSG_CurrentRSSIdBm(), remote_cv, MSG_TYPE_PONG);
-        gMsgRangeStatus = 0u;
+        /* Show every PONG immediately, but keep the original 12-second
+           collection window and its channel lock for later responders. */
         gMsgRangeFound = true;
-        gMsgRangeWait10ms = 0u;
         redraw();
     }
 }
@@ -601,6 +684,7 @@ void MSG_StorePacket(uint16_t interrupt_bits)
     const bool rx_finished = (interrupt_bits & BK4819_REG_02_FSK_RX_FINISHED) != 0u;
 
     if (rx_sync) {
+        MSG_FskSyncHoldStart(gEeprom.RX_VFO);
         gMsgRxIndex = 0u;
         memset(gMsgRxBytes, 0, sizeof(gMsgRxBytes));
         gMsgRxStatus = MSG_RX_RECEIVING;
@@ -710,6 +794,17 @@ static void MSG_RFSendRepeatOnVfo(uint8_t type, const char *text, uint16_t id, c
     }
 }
 
+static void MSG_RFSendTextFirstAttempt(const char *text, uint16_t id, const char *to)
+{
+    /* Sender-only Power Save lead-in. The WAKE frame is a valid GGM2 control
+       frame but remains invisible on compatible receivers. Automatic retries
+       deliberately bypass this helper and send only the real TEXT. */
+    MSG_RFSendRepeat(MSG_TYPE_WAKE, NULL, id, to,
+                     MSG_INITIAL_WAKE_REPEATS, MSG_INITIAL_WAKE_GAP_MS);
+    SYSTEM_DelayMs(MSG_INITIAL_WAKE_GAP_MS);
+    MSG_RFSendOnce(MSG_TYPE_TEXT, text, id, to);
+}
+
 
 static const char *t9_group(uint8_t mode, KEY_Code_t key)
 {
@@ -796,6 +891,15 @@ static void t9_handle(char *buf, uint8_t *len, uint8_t max, uint8_t *mode,
 
 void MSG_Tick10ms(void)
 {
+    if (gMsgAckPending)
+        MSG_ResponseLockMaintain(gMsgAckWait10ms);
+    else if (gMsgRangeStatus == 1u)
+        MSG_ResponseLockMaintain(gMsgRangeWait10ms);
+    else if (gFskSyncHold10ms > 0u) {
+        MSG_ResponseLockMaintain(gFskSyncHold10ms);
+        if (--gFskSyncHold10ms == 0u) MSG_ResponseLockStop();
+    }
+
     if (gMsgT9Timeout10ms > 0u && --gMsgT9Timeout10ms == 0u) {
         t9_commit_common(&gMsgT9LastKey, &gMsgT9TapIndex, &gMsgT9Timeout10ms);
     }
@@ -813,16 +917,23 @@ void MSG_Tick10ms(void)
         for (uint8_t hi = 0u; hi < gHeardCount; hi++) if (gHeard[hi].age_seconds < 0xFFFFu) ++gHeard[hi].age_seconds;
         if (gMsgScreen == MSG_SCREEN_SENT || gMsgScreen == MSG_SCREEN_INBOX || gMsgScreen == MSG_SCREEN_READ || gMsgScreen == MSG_SCREEN_RANGE) redraw();
     }
-    if (gPendingAckActive) {
-        if (gPendingAckDelay10ms > 0u) --gPendingAckDelay10ms;
-        if (gPendingAckDelay10ms == 0u) {
-            if (g_SquelchLost) {
-                gPendingAckDelay10ms = 10u;
-            } else {
-                MSG_RFSendRepeatOnVfo(MSG_TYPE_ACK, NULL, gPendingAckId, gPendingAckTo, 1u, MSG_REPEAT_GAP_MS, gPendingAckVfo);
-                gPendingAckActive = false;
-                gPendingAckVfo = 0xFFu;
-            }
+    if (!gMessengerAck) {
+        for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++)
+            gPendingAckQueue[i].active = false;
+    } else {
+        for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++) {
+            if (gPendingAckQueue[i].active && gPendingAckQueue[i].delay10ms > 0u)
+                --gPendingAckQueue[i].delay10ms;
+        }
+    }
+    if (gMessengerAck && !g_SquelchLost) {
+        for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++) {
+            if (!gPendingAckQueue[i].active || gPendingAckQueue[i].delay10ms != 0u) continue;
+            MSG_RFSendRepeatOnVfo(MSG_TYPE_ACK, NULL, gPendingAckQueue[i].id,
+                                  gPendingAckQueue[i].to, 1u, MSG_REPEAT_GAP_MS,
+                                  gPendingAckQueue[i].vfo);
+            gPendingAckQueue[i].active = false;
+            break;
         }
     }
     if (gPendingPongActive) {
@@ -859,6 +970,7 @@ void MSG_Tick10ms(void)
                     gMsgAckRetried = true;
                     gMsgAckWait10ms = MSG_ACK_WAIT_10MS;
                     MSG_RFSendOnce(MSG_TYPE_TEXT, gMsgAckText[0] ? gMsgAckText : "EMPTY", gMsgWaitAckId, MSG_PKT_TO_ALL);
+                    MSG_ResponseLockStart(gEeprom.TX_VFO, MSG_ACK_WAIT_10MS);
                     redraw();
                 }
             } else {
@@ -870,6 +982,7 @@ void MSG_Tick10ms(void)
         if (--gMsgRangeWait10ms == 0u) {
             gMsgRangeStatus = 0u;
             gMsgRangeFound = false;
+            MSG_ResponseLockStop();
             redraw();
         }
     }
@@ -965,7 +1078,7 @@ static void add_sent(uint16_t id, const char *text)
     }
     strncpy(gSent[0].text, text, MSG_TEXT_LEN);
     gSent[0].text[MSG_TEXT_LEN] = 0;
-    gSent[0].status = MSG_STATUS_PENDING;
+    gSent[0].status = gMessengerAck ? MSG_STATUS_PENDING : MSG_STATUS_NONE;
     gSent[0].id = id;
     gSent[0].age_seconds = 0u;
     gSent[0].unread = false;
@@ -982,39 +1095,83 @@ static void MSG_MarkPendingFailed(void)
     gMsgAckPending = false;
     gMsgAckRetried = false;
     gMsgAckWait10ms = 0u;
+    MSG_ResponseLockStop();
     redraw();
+}
+
+static const char *MSG_SnapshotTxText(const char *text)
+{
+    if (text == gMsgAckText) return gMsgAckText;
+
+    if (text == NULL || text[0] == 0) text = "EMPTY";
+    memset(gMsgAckText, 0, sizeof(gMsgAckText));
+    strncpy(gMsgAckText, text, MSG_TEXT_LEN);
+    gMsgAckText[MSG_TEXT_LEN] = 0;
+    return gMsgAckText;
 }
 
 static void MSG_StartAckWait(uint16_t id, const char *text)
 {
-    memset(gMsgAckText, 0, sizeof(gMsgAckText));
-    if (text != NULL) {
-        strncpy(gMsgAckText, text, MSG_TEXT_LEN);
-        gMsgAckText[MSG_TEXT_LEN] = 0;
+    if (!gMessengerAck) {
+        gMsgAckPending = false;
+        gMsgAckRetried = false;
+        gMsgAckWait10ms = 0u;
+        MSG_ResponseLockStop();
+        return;
     }
+
+    MSG_SnapshotTxText(text);
+    gFskSyncHold10ms = 0u;
     gMsgWaitAckId = id;
     gMsgAckPending = true;
     gMsgAckRetried = false;
     gMsgAckWait10ms = MSG_ACK_WAIT_10MS;
+    MSG_ResponseLockStart(gEeprom.TX_VFO, MSG_ACK_WAIT_10MS);
 }
 
-static void MSG_QueueAck(uint16_t id, const char *to)
+static void MSG_QueueAck(uint16_t id, const char *to, uint8_t rx_vfo)
 {
     if (!gMessengerAck) return;
-    gPendingAckActive = true;
-    gPendingAckDelay10ms = (uint16_t)(MSG_ACK_DELAY_MIN_10MS + MSG_Jitter(id, MSG_ACK_DELAY_JIT_10MS + 1u));
-    gPendingAckId = id;
-    memset(gPendingAckTo, 0, sizeof(gPendingAckTo));
-    if (to && to[0]) strncpy(gPendingAckTo, to, MSG_PKT_CALLSIGN_FIELD_LEN);
-    else strncpy(gPendingAckTo, MSG_PKT_TO_ALL, MSG_PKT_CALLSIGN_FIELD_LEN);
+
+    char ack_to[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
+    memset(ack_to, 0, sizeof(ack_to));
+    if (to && to[0]) strncpy(ack_to, to, MSG_PKT_CALLSIGN_FIELD_LEN);
+    else strncpy(ack_to, MSG_PKT_TO_ALL, MSG_PKT_CALLSIGN_FIELD_LEN);
+
+    for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++) {
+        if (!gPendingAckQueue[i].active) continue;
+        if (gPendingAckQueue[i].id == id &&
+            strncmp(gPendingAckQueue[i].to, ack_to, MSG_PKT_CALLSIGN_FIELD_LEN) == 0) {
+            return;
+        }
+    }
+
+    for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++) {
+        if (gPendingAckQueue[i].active) continue;
+        gPendingAckQueue[i].active = true;
+        gPendingAckQueue[i].delay10ms =
+            (uint16_t)(MSG_ACK_DELAY_MIN_10MS + MSG_Jitter(id, MSG_ACK_DELAY_JIT_10MS + 1u));
+        gPendingAckQueue[i].id = id;
+        gPendingAckQueue[i].vfo = (uint8_t)(rx_vfo & 1u);
+        memset(gPendingAckQueue[i].to, 0, sizeof(gPendingAckQueue[i].to));
+        strncpy(gPendingAckQueue[i].to, ack_to, MSG_PKT_CALLSIGN_FIELD_LEN);
+        return;
+    }
 }
 
-static void MSG_QueuePong(uint16_t id, const char *to)
+static void MSG_QueuePong(uint16_t id, const char *to, uint8_t rx_vfo)
 {
     if (!gMessengerRangeRsp) return;
+
+    if (gPendingPongActive && gPendingPongId == id && to &&
+        strncmp(gPendingPongTo, to, MSG_PKT_CALLSIGN_FIELD_LEN) == 0) {
+        return;
+    }
+
     gPendingPongActive = true;
     gPendingPongDelay10ms = (uint16_t)(MSG_RANGE_PONG_MIN_10MS + MSG_Jitter(id ^ 0xA55Au, MSG_RANGE_PONG_JIT_10MS + 1u));
     gPendingPongId = id;
+    gPendingPongVfo = (uint8_t)(rx_vfo & 1u);
     memset(gPendingPongTo, 0, sizeof(gPendingPongTo));
     if (to && to[0]) strncpy(gPendingPongTo, to, MSG_PKT_CALLSIGN_FIELD_LEN);
     else strncpy(gPendingPongTo, MSG_PKT_TO_ALL, MSG_PKT_CALLSIGN_FIELD_LEN);
@@ -1089,6 +1246,7 @@ static void close_messenger_to_main(void)
     gMsgCursor = 0u;
     gMsgScroll = 0u;
     gMsgHomeCursor = 0u;
+    if (gMsgRangeStatus == 1u && !gMsgAckPending) MSG_ResponseLockStop();
     gMsgRangeStatus = 0u;
     gMsgRangeWait10ms = 0u;
     gMsgRangeFound = false;
@@ -1115,6 +1273,7 @@ void MSG_Open(void)
     gMsgCursor = 0u;
     gMsgScroll = 0u;
     gMsgHomeCursor = 0u;
+    if (gMsgRangeStatus == 1u && !gMsgAckPending) MSG_ResponseLockStop();
     gMsgRangeStatus = 0u;
     gMsgRangeWait10ms = 0u;
     gMsgRangeFound = false;
@@ -1130,6 +1289,7 @@ void MSG_RangeOpen(void)
     gMsgCursor = 0u;
     gMsgScroll = 0u;
     gMsgRangeScroll = 0u;
+    if (gMsgRangeStatus == 1u && !gMsgAckPending) MSG_ResponseLockStop();
     gMsgRangeStatus = 0u;
     gMsgRangeWait10ms = 0u;
     gMsgRangeFound = false;
@@ -1306,9 +1466,9 @@ void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                 }
             } else if (Key == KEY_MENU) {
                 if (gMsgReadSource == MSG_SCREEN_SENT) {
-                    const char *rt = MSG_GetReadText()[0] ? MSG_GetReadText() : "EMPTY";
+                    const char *rt = MSG_SnapshotTxText(MSG_GetReadText());
                     uint16_t id = gMsgNextId++;
-                    MSG_RFSendOnce(MSG_TYPE_TEXT, rt, id, MSG_PKT_TO_ALL);
+                    MSG_RFSendTextFirstAttempt(rt, id, MSG_PKT_TO_ALL);
                     add_sent(id, rt);
                     MSG_StartAckWait(id, rt);
                     open_sent_after_send();
@@ -1332,9 +1492,9 @@ void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                     gDrafts[gMsgComposeDraftIndex][MSG_TEXT_LEN] = 0;
                     MSG_SaveDrafts();
                 }
-                const char *tx = gMsgComposeBuf[0] ? gMsgComposeBuf : "EMPTY";
+                const char *tx = MSG_SnapshotTxText(gMsgComposeBuf);
                 uint16_t id = gMsgNextId++;
-                MSG_RFSendOnce(MSG_TYPE_TEXT, tx, id, MSG_PKT_TO_ALL);
+                MSG_RFSendTextFirstAttempt(tx, id, MSG_PKT_TO_ALL);
                 add_sent(id, tx);
                 MSG_StartAckWait(id, tx);
                 open_sent_after_send();
@@ -1351,7 +1511,13 @@ void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
             if (Key == KEY_EXIT) {
                 close_messenger_to_main(); return;
             } else if (Key == KEY_MENU) {
-                if (gMsgRangeStatus != 1u) { MSG_RFSendRepeat(MSG_TYPE_PING, NULL, gMsgNextId++, MSG_PKT_TO_ALL, 2u, 700u); gMsgRangeStatus = 1u; gMsgRangeWait10ms = 1200u; }
+                if (gMsgRangeStatus != 1u) {
+                    MSG_RFSendRepeat(MSG_TYPE_PING, NULL, gMsgNextId++, MSG_PKT_TO_ALL, 2u, MSG_REPEAT_GAP_MS);
+                    gMsgRangeStatus = 1u;
+                    gMsgRangeWait10ms = 1200u;
+                    gFskSyncHold10ms = 0u;
+                    MSG_ResponseLockStart(gEeprom.TX_VFO, gMsgRangeWait10ms);
+                }
             } else if (Key == KEY_UP || Key == KEY_DOWN) {
                 uint8_t pages = (uint8_t)((gHeardCount + MSG_HEARD_PAGE_ROWS - 1u) / MSG_HEARD_PAGE_ROWS);
                 if (pages == 0u) pages = 1u;
@@ -1388,8 +1554,7 @@ void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                     case 4: gMessengerHop = (uint8_t)((gMessengerHop + 1u) % 6u); MSG_SaveConfig(); break;
                     case 5: gMessengerBeep = !gMessengerBeep; MSG_SaveConfig(); break;
                     case 6: gMessengerLed = (uint8_t)((gMessengerLed + 1u) % 3u); MSG_SaveConfig(); break;
-                    case 7: gMessengerDebug = !gMessengerDebug; MSG_SaveConfig(); break;
-                    case 8: go_home(); break;
+                    case 7: go_home(); break;
                     default: break;
                 }
             } else if (Key == KEY_EXIT) go_home();

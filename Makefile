@@ -5,6 +5,7 @@
 
 # ---- STOCK QUANSHENG FERATURES ----
 ENABLE_UART                   ?= 0
+ENABLE_UART_CHIRP_LITE        ?= 0
 ENABLE_AIRCOPY                ?= 0
 ENABLE_FMRADIO                ?= 1
 ENABLE_GOGUFW_MESSENGER        ?= 1
@@ -83,7 +84,9 @@ OBJS += external/printf/printf.o
 # Drivers
 OBJS += driver/adc.o
 ifeq ($(ENABLE_UART),1)
+ifeq ($(ENABLE_UART_CHIRP_LITE),0)
 	OBJS += driver/aes.o
+endif
 endif
 OBJS += driver/backlight.o
 ifeq ($(ENABLE_FMRADIO),1)
@@ -278,6 +281,12 @@ ifeq ($(ENABLE_GOGUFW_MESSENGER),1)
 endif
 ifeq ($(ENABLE_UART),1)
 	CFLAGS += -DENABLE_UART
+endif
+ifeq ($(ENABLE_UART_CHIRP_LITE),1)
+	CFLAGS += -DENABLE_UART_CHIRP_LITE
+	# GCC 12+ provides -Oz for tighter code generation than -Os.  The Lite
+	# profile needs this to keep CHIRP UART support without removing features.
+	CFLAGS += -Oz
 endif
 ifeq ($(ENABLE_BIG_FREQ),1)
 	CFLAGS  += -DENABLE_BIG_FREQ

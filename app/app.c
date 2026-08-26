@@ -1153,10 +1153,6 @@ void APP_TimeSlice10ms(void)
 		return;
 #endif
 
-#ifdef ENABLE_FLASHLIGHT
-	FlashlightTimeSlice();
-#endif
-
 #ifdef ENABLE_VOX
 	if (gVoxResumeCountdown > 0)
 		gVoxResumeCountdown--;

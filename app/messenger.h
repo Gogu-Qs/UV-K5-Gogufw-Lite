@@ -24,6 +24,7 @@ typedef enum {
     MSG_STATUS_PENDING = 0,
     MSG_STATUS_ACKED,
     MSG_STATUS_FAILED,
+    MSG_STATUS_NONE,
 } MSG_Status_t;
 
 void MSG_Open(void);
@@ -45,7 +46,6 @@ extern bool gMessengerAck;
 extern uint8_t gMessengerHop;
 extern bool gMessengerBeep;
 extern uint8_t gMessengerLed;
-extern bool gMessengerDebug;
 
 MSG_Screen_t MSG_GetScreen(void);
 uint8_t MSG_GetHomeCursor(void);

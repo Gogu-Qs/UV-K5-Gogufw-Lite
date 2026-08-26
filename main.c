@@ -80,7 +80,9 @@ void Main(void)
 
 #ifdef ENABLE_UART
 	UART_Init();
-	UART_Send(UART_Version, strlen(UART_Version));
+	#ifndef ENABLE_UART_CHIRP_LITE
+		UART_Send(UART_Version, strlen(UART_Version));
+	#endif
 #endif
 
 	// Not implementing authentic device checks
