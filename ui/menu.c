@@ -158,6 +158,14 @@ const t_menu_item MenuList[] =
 	{"",       VOICE_ID_INVALID,                       0xff               }  // end of list - DO NOT delete or move this this
 };
 
+const char *UI_MENU_GetMenuName(uint8_t index)
+{
+	static char name[7];
+	memcpy(name, MenuList[index].name, 6);
+	name[6] = 0;
+	return name;
+}
+
 #ifdef ENABLE_GOGUFW_MESSENGER
 const uint8_t FIRST_HIDDEN_MENU_ITEM = MENU_MSG_HOP;
 #else
@@ -432,7 +440,7 @@ void UI_DisplayMenu(void)
 	for (i = 0; i < 3; i++)
 		if (gMenuCursor > 0 || i > 0)
 			if ((gMenuListCount - 1) != gMenuCursor || i != 2)
-				UI_PrintString(MenuList[gMenuCursor + i - 1].name, 0, 0, i * 2, 8);
+				UI_PrintString(UI_MENU_GetMenuName(gMenuCursor + i - 1), 0, 0, i * 2, 8);
 
 	// invert the current menu list item pixels
 	for (i = 0; i < (8 * menu_list_width); i++)
@@ -464,24 +472,24 @@ void UI_DisplayMenu(void)
 			{	// leading menu items - small text
 				const int k = menu_index + i - 2;
 				if (k < 0)
-					UI_PrintStringSmallNormal(MenuList[gMenuListCount + k].name, 0, 0, i);  // wrap-a-round
+					UI_PrintStringSmallNormal(UI_MENU_GetMenuName(gMenuListCount + k), 0, 0, i);  // wrap-a-round
 				else if (k >= 0 && k < (int)gMenuListCount)
-					UI_PrintStringSmallNormal(MenuList[k].name, 0, 0, i);
+					UI_PrintStringSmallNormal(UI_MENU_GetMenuName(k), 0, 0, i);
 				i++;
 			}
 
 			// current menu item - keep big n fat
 			if (menu_index >= 0 && menu_index < (int)gMenuListCount)
-				UI_PrintString(MenuList[menu_index].name, 0, 0, 2, 8);
+				UI_PrintString(UI_MENU_GetMenuName(menu_index), 0, 0, 2, 8);
 			i++;
 
 			while (i < 4)
 			{	// trailing menu item - small text
 				const int k = menu_index + i - 2;
 				if (k >= 0 && k < (int)gMenuListCount)
-					UI_PrintStringSmallNormal(MenuList[k].name, 0, 0, 1 + i);
+					UI_PrintStringSmallNormal(UI_MENU_GetMenuName(k), 0, 0, 1 + i);
 				else if (k >= (int)gMenuListCount)
-					UI_PrintStringSmallNormal(MenuList[gMenuListCount - k].name, 0, 0, 1 + i);  // wrap-a-round
+					UI_PrintStringSmallNormal(UI_MENU_GetMenuName(gMenuListCount - k), 0, 0, 1 + i);  // wrap-a-round
 				i++;
 			}
 
@@ -492,7 +500,7 @@ void UI_DisplayMenu(void)
 		else if (menu_index >= 0 && menu_index < (int)gMenuListCount)
 		{	// current menu item
 //			strcat(String, ":");
-			UI_PrintString(MenuList[menu_index].name, 0, 0, 0, 8);
+			UI_PrintString(UI_MENU_GetMenuName(menu_index), 0, 0, 0, 8);
 //			UI_PrintStringSmallNormal(String, 0, 0, 0);
 		}
 	}

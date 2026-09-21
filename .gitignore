@@ -1,0 +1,9 @@
+*.o
+*.d
+/firmware
+/firmware.bin
+/firmware.hex
+/firmware.packed.bin
+/GOGUFW_LITE_K5_*TEST*.bin
+/GOGUFW_LITE_K5_*TEST*.packed.bin
+/compiled-firmware/

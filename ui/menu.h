@@ -24,7 +24,7 @@
 #include "settings.h"
 
 typedef struct {
-	const char  name[7];    // menu display area only has room for 6 characters
+	const char  name[6] __attribute__((nonstring)); // getter adds the terminator
 	VOICE_ID_t  voice_id;
 	uint8_t     menu_id;
 } t_menu_item;
@@ -186,5 +186,6 @@ extern int               edit_index;
 void UI_DisplayMenu(void);
 int UI_MENU_GetCurrentMenuId();
 uint8_t UI_MENU_GetMenuIdx(uint8_t id);
+const char *UI_MENU_GetMenuName(uint8_t index);
 
 #endif

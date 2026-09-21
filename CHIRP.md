@@ -1,11 +1,11 @@
 # GOGUFW Lite CHIRP module
 
-Use `UV-K5_GOGUFW_Lite_1.0.1_chirp_module.py` with a current CHIRP daily build.
+Use `UV-K5_GOGUFW_Lite_1.0.2_chirp_module.py` with a current CHIRP daily build.
 
 1. In CHIRP, enable **Developer mode**.
 2. Choose **File > Load Module** and select the module.
 3. Connect the normal UV-K5 two-pin programming cable while the radio is on.
-4. Select **Quansheng / UV-K5 GOGUFW Lite / 1.0.1** and download from the
+4. Select **GOGUFW / UV-K5 / Lite 1.0.2** and download from the
    radio before making changes.
 5. Save the downloaded image as a backup, then edit and upload normally.
 

@@ -418,6 +418,9 @@ int MENU_GetLimits(uint8_t menu_id, int32_t *pMin, int32_t *pMax)
 	return 0;
 }
 
+#ifdef ENABLE_LITE_SIZE_OPT
+__attribute__((optimize("no-tree-loop-optimize")))
+#endif
 void MENU_AcceptSetting(void)
 {
 	int32_t        Min;
@@ -1797,6 +1800,9 @@ static void MENU_Key_UP_DOWN(bool bKeyPressed, bool bKeyHeld, int8_t Direction)
 	gRequestDisplayScreen = DISPLAY_MENU;
 }
 
+#ifdef ENABLE_LITE_SIZE_OPT
+__attribute__((optimize("no-tree-loop-optimize")))
+#endif
 void MENU_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 {
 	switch (Key) {

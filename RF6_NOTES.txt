@@ -1,9 +1,0 @@
-RF6 recovery build notes
-- Based on the last working UI/menu/callsign package, not RF5/RF5a.
-- Restores FSK TX path to use the radio's normal RADIO_SetTxParameters() before FSK FIFO start.
-- Avoids the RF5 sequence that turned TX LED on but produced no FSK audio.
-- Adds PTT voice-path restore before/after normal PTT handling so mic audio should recover after Messenger FSK use.
-- Adds Range WAIT timeout (10 s) so WAIT does not hang forever.
-- Adds simple UV-K1-style repeated bursts: text sends twice, range ping sends three times.
-- Keeps RX decode conservative for this step; RX backend is next RF stage after TX/voice is stable.
-- Size trim: UART, Flashlight, Scan Ranges are disabled to keep the build under FLASH limit.

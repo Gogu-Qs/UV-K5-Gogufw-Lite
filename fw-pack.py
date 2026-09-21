@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
-import crcmod
 import sys
+
+try:
+    import crcmod
+except ImportError:
+    crcmod = None
 
 from itertools import cycle
 from binascii import hexlify
@@ -20,6 +24,14 @@ OBFUSCATION = [
 def obfuscate(fw):
     return bytes([a^b for a, b in zip(fw, cycle(OBFUSCATION))])
 
+def crc16_xmodem(data):
+    crc = 0
+    for value in data:
+        crc ^= value << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
 plain = open(sys.argv[1], 'rb').read()
 
 version = b'*' + bytes(sys.argv[2], 'ascii') + b' ' + bytes(sys.argv[3], 'ascii')
@@ -30,10 +42,13 @@ if len(version) < 16:
 
 packed = obfuscate(plain[:0x2000] + version + plain[0x2000:])
 
-crc = crcmod.predefined.Crc('xmodem')
-crc.update(packed)
-digest = crc.digest()
-digest = bytes([digest[1], digest[0]])
+if crcmod:
+    crc = crcmod.predefined.Crc('xmodem')
+    crc.update(packed)
+    digest = crc.digest()
+    digest = bytes([digest[1], digest[0]])
+else:
+    crc = crc16_xmodem(packed)
+    digest = bytes([crc & 0xFF, crc >> 8])
 
 open(sys.argv[4], 'wb').write(packed + digest)
-

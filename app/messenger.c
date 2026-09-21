@@ -52,18 +52,18 @@
 #define MSG_DRAFT_MARKER 0xD5u
 
 typedef struct {
-    char text[MSG_TEXT_LEN + 1u];
-    MSG_Status_t status;
     uint16_t id;
     uint16_t age_seconds;
-    bool unread;
+    char text[MSG_TEXT_LEN + 1u];
     char from[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
+    MSG_Status_t status;
+    bool unread;
 } MSG_Item_t;
 
 typedef struct {
-    char call[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
     uint16_t age_seconds;
     int16_t rssi_dbm;
+    char call[MSG_PKT_CALLSIGN_FIELD_LEN + 1u];
     uint8_t type;
 } MSG_HeardItem_t;
 
@@ -95,9 +95,9 @@ static uint8_t gInboxCount;
 static MSG_Item_t gSent[MSG_SENT_CAPACITY];
 static uint8_t gSentCount;
 
-static char gDrafts[MSG_DRAFT_CAPACITY][MSG_TEXT_LEN + 1u] = {
-    "OK", "CALL ME", "WHERE ARE YOU", "ON MY WAY", "SAFE"
-};
+static char gDrafts[MSG_DRAFT_CAPACITY][MSG_TEXT_LEN + 1u];
+static const char gDraftDefaults[] =
+    "OK\0CALL ME\0WHERE ARE YOU\0ON MY WAY\0SAFE";
 
 static char gMsgComposeBuf[MSG_TEXT_LEN + 1u];
 static uint8_t gMsgComposeLen;
@@ -130,6 +130,7 @@ uint8_t gMessengerLed = 1u;
 
 static uint16_t gMsgTxBuf[MSG_FSK_WORDS];
 static uint16_t gMsgNextId = 1u;
+static uint16_t gMsgReplyJitter;
 
 /* RF10 safety scheduler: keep RF7b TX path, do not enable FSK RX/stock RX hooks.
    This only fixes UI sent status timing (? -> retry -> x) without touching voice RX. */
@@ -137,7 +138,8 @@ static uint16_t gMsgNextId = 1u;
 #define MSG_ACK_DELAY_MIN_10MS  80u  /* UV-K1: delayed ACK, 800ms minimum */
 #define MSG_ACK_DELAY_JIT_10MS 220u  /* +0..2.2s jitter => 0.8..3.0s */
 #define MSG_RANGE_PONG_MIN_10MS 300u /* UV-K1: 3s minimum PONG delay */
-#define MSG_RANGE_PONG_JIT_10MS 500u /* +0..5s jitter => 3..8s */
+#define MSG_RANGE_PONG_SLOT_10MS 120u /* UV-K1: six 1.2s slots start at 3..9s */
+#define MSG_RANGE_PONG_SLOTS       6u
 #define MSG_REPEAT_GAP_MS       100u
 #define MSG_INITIAL_WAKE_REPEATS 1u
 #define MSG_INITIAL_WAKE_GAP_MS 120u
@@ -173,7 +175,7 @@ static bool gResponseLockOldDualWatchActive;
 static uint16_t gFskSyncHold10ms;
 
 #define MSG_SEEN_CACHE 8u
-typedef struct { char from[MSG_PKT_CALLSIGN_FIELD_LEN + 1u]; uint16_t id; uint8_t type; } MSG_Seen_t;
+typedef struct { uint16_t id; char from[MSG_PKT_CALLSIGN_FIELD_LEN + 1u]; uint8_t type; } MSG_Seen_t;
 static MSG_Seen_t gSeen[MSG_SEEN_CACHE];
 static uint8_t gSeenNext;
 
@@ -198,6 +200,7 @@ static void MSG_ResponseLockStart(uint8_t vfo, uint16_t ticks);
 static void MSG_ResponseLockStop(void);
 static void MSG_ResponseLockMaintain(uint16_t ticks);
 static void MSG_FskSyncHoldStart(uint8_t vfo);
+static uint8_t MSG_PendingReplyVfo(void);
 
 static void MSG_SaveDrafts(void)
 {
@@ -220,6 +223,11 @@ static void MSG_LoadDrafts(void)
 {
     uint8_t slot[MSG_DRAFT_SLOT_SIZE];
     bool valid = false;
+    const char *draft_default = gDraftDefaults;
+    for (uint8_t i = 0u; i < MSG_DRAFT_CAPACITY; i++) {
+        strcpy(gDrafts[i], draft_default);
+        draft_default += strlen(draft_default) + 1u;
+    }
     for (uint8_t i = 0u; i < MSG_DRAFT_CAPACITY; i++) {
         EEPROM_ReadBuffer((uint16_t)(MSG_DRAFT_EEPROM_ADDR + ((uint16_t)i * MSG_DRAFT_SLOT_SIZE)), slot, sizeof(slot));
         if (slot[37] == MSG_DRAFT_MARKER && slot[38] == i &&
@@ -337,13 +345,20 @@ static void MSG_LedSet(bool on)
 static uint16_t MSG_Jitter(uint16_t seed, uint16_t span)
 {
     if (span == 0u) return 0u;
-    uint16_t x = (uint16_t)(seed ^ gMsgNextId ^ (uint16_t)gMsgAgeSubTicks ^ 0x5A3Cu);
+    /* Mix fresh timing/RF state with the responder callsign so receivers of
+       the same packet do not select the same ACK delay or PONG slot.  Keep a
+       rolling state so a later retry also gets a fresh delay. */
+    uint16_t x = (uint16_t)(gMsgReplyJitter ^ seed ^ gMsgNextId ^
+                            gFlashLightBlinkCounter ^
+                            BK4819_ReadRegister(BK4819_REG_67) ^
+                            (BK4819_ReadRegister(BK4819_REG_0C) << 5));
     for (uint8_t i = 0u; i < MSG_CALLSIGN_LEN && gCallsign[i]; i++) {
-        x ^= (uint16_t)((uint16_t)(uint8_t)gCallsign[i] << ((i & 1u) ? 8u : 0u));
+        x = (uint16_t)((x ^ (uint8_t)gCallsign[i]) * 109u + 89u);
     }
     x ^= (uint16_t)(x << 7);
     x ^= (uint16_t)(x >> 9);
     x ^= (uint16_t)(x << 8);
+    gMsgReplyJitter = x ? x : 0x5A3Cu;
     return (uint16_t)(x % span);
 }
 
@@ -403,6 +418,15 @@ static void MSG_FskSyncHoldStart(uint8_t vfo)
     gFskSyncHold10ms = MSG_FSK_SYNC_HOLD_10MS;
     if (!gResponseLockActive || gResponseLockVfo == (vfo & 1u))
         MSG_ResponseLockStart(vfo, gFskSyncHold10ms);
+}
+
+static uint8_t MSG_PendingReplyVfo(void)
+{
+    if (gPendingPongActive) return gPendingPongVfo;
+    for (uint8_t i = 0u; i < MSG_ACK_QUEUE_LEN; i++) {
+        if (gPendingAckQueue[i].active) return gPendingAckQueue[i].vfo;
+    }
+    return 0xFFu;
 }
 
 static int16_t MSG_CurrentRSSIdBm(void)
@@ -891,10 +915,13 @@ static void t9_handle(char *buf, uint8_t *len, uint8_t max, uint8_t *mode,
 
 void MSG_Tick10ms(void)
 {
+    const uint8_t pending_reply_vfo = MSG_PendingReplyVfo();
     if (gMsgAckPending)
         MSG_ResponseLockMaintain(gMsgAckWait10ms);
     else if (gMsgRangeStatus == 1u)
         MSG_ResponseLockMaintain(gMsgRangeWait10ms);
+    else if (pending_reply_vfo != 0xFFu)
+        MSG_ResponseLockStart(pending_reply_vfo, 1200u);
     else if (gFskSyncHold10ms > 0u) {
         MSG_ResponseLockMaintain(gFskSyncHold10ms);
         if (--gFskSyncHold10ms == 0u) MSG_ResponseLockStop();
@@ -933,6 +960,7 @@ void MSG_Tick10ms(void)
                                   gPendingAckQueue[i].to, 1u, MSG_REPEAT_GAP_MS,
                                   gPendingAckQueue[i].vfo);
             gPendingAckQueue[i].active = false;
+            gFskSyncHold10ms = 1u;
             break;
         }
     }
@@ -945,6 +973,7 @@ void MSG_Tick10ms(void)
                 MSG_RFSendRepeatOnVfo(MSG_TYPE_PONG, NULL, gPendingPongId, gPendingPongTo, 1u, MSG_REPEAT_GAP_MS, gPendingPongVfo);
                 gPendingPongActive = false;
                 gPendingPongVfo = 0xFFu;
+                gFskSyncHold10ms = 1u;
             }
         }
     }
@@ -1169,7 +1198,8 @@ static void MSG_QueuePong(uint16_t id, const char *to, uint8_t rx_vfo)
     }
 
     gPendingPongActive = true;
-    gPendingPongDelay10ms = (uint16_t)(MSG_RANGE_PONG_MIN_10MS + MSG_Jitter(id ^ 0xA55Au, MSG_RANGE_PONG_JIT_10MS + 1u));
+    gPendingPongDelay10ms = (uint16_t)(MSG_RANGE_PONG_MIN_10MS +
+        MSG_Jitter((uint16_t)(id ^ 0xA55Au), MSG_RANGE_PONG_SLOTS) * MSG_RANGE_PONG_SLOT_10MS);
     gPendingPongId = id;
     gPendingPongVfo = (uint8_t)(rx_vfo & 1u);
     memset(gPendingPongTo, 0, sizeof(gPendingPongTo));

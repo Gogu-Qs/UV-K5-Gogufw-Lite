@@ -1,4 +1,4 @@
-"""CHIRP driver for Quansheng UV-K5 GOGUFW Lite 1.0.1.
+"""CHIRP driver for Quansheng UV-K5 GOGUFW Lite 1.0.2.
 
 The upload range deliberately ends before GOGUFW Messenger drafts at 0x1C00.
 """
@@ -11,7 +11,7 @@ from chirp.settings import RadioSettings
 
 
 LOG = logging.getLogger(__name__)
-DRIVER_VERSION = "1.0.1"
+DRIVER_VERSION = "1.0.2"
 GOGUFW_PROGRAM_END = 0x1C00
 GOGUFW_BLOCK_SIZE = 0x80
 
@@ -24,7 +24,7 @@ def _do_safe_upload(radio):
     status = chirp_common.Status()
     status.cur = 0
     status.max = GOGUFW_PROGRAM_END
-    status.msg = "Uploading to UV-K5 GOGUFW Lite 1.0.1"
+    status.msg = "Uploading to UV-K5 GOGUFW Lite 1.0.2"
     radio.status_fn(status)
 
     firmware = uvk5._sayhello(serial)
@@ -32,7 +32,7 @@ def _do_safe_upload(radio):
         raise errors.RadioError("Unable to determine firmware version")
     if not radio.k5_approve_firmware(firmware):
         raise errors.RadioError(
-            "This module only supports UV-K5 GOGUFW Lite 1.0.1")
+            "This module only supports UV-K5 GOGUFW Lite 1.0.2")
 
     LOG.info("Uploading GOGUFW image to firmware %r", firmware)
     mmap = radio.get_mmap()
@@ -50,17 +50,21 @@ def _do_safe_upload(radio):
 
 
 @directory.register
-class GOGUFWLite101Radio(uvk5_egzumer.UVK5RadioEgzumer):
-    """Selectable Quansheng UV-K5 GOGUFW Lite driver."""
+class GOGUFWLite102Radio(uvk5_egzumer.UVK5RadioEgzumer):
+    """Selectable GOGUFW UV-K5 Lite driver."""
 
-    VENDOR = "Quansheng"
-    MODEL = "UV-K5 GOGUFW Lite"
-    VARIANT = DRIVER_VERSION
+    # UVK5RadioEgzumer is normally hidden because it is detected through the
+    # stock UV-K5 driver.  GOGUFW must be selectable directly so that CHIRP
+    # does not fall back to the read-only "unsupported" class.
+    _DETECTED_BY = None
+    VENDOR = "GOGUFW"
+    MODEL = "UV-K5"
+    VARIANT = "Lite " + DRIVER_VERSION
     BAUD_RATE = 38400
 
     @classmethod
     def k5_approve_firmware(cls, firmware):
-        return firmware.startswith("GOGUFW 1.0.1")
+        return firmware.startswith("GOGUFW 1.0.2")
 
     def sync_out(self):
         _do_safe_upload(self)

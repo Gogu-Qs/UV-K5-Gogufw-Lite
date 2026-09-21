@@ -53,6 +53,7 @@ ENABLE_CLANG                  ?= 0
 ENABLE_SWD                    ?= 0
 ENABLE_OVERLAY                ?= 0
 ENABLE_LTO                    ?= 1
+ENABLE_LITE_SIZE_OPT          ?= 0
 
 #############################################################
 
@@ -79,7 +80,11 @@ OBJS += init.o
 ifeq ($(ENABLE_OVERLAY),1)
 	OBJS += sram-overlay.o
 endif
-OBJS += external/printf/printf.o
+ifeq ($(ENABLE_LITE_SIZE_OPT),1)
+	OBJS += external/printf/mini_printf.o
+else
+	OBJS += external/printf/printf.o
+endif
 
 # Drivers
 OBJS += driver/adc.o
@@ -397,6 +402,10 @@ ifeq ($(ENABLE_CUSTOM_MENU_LAYOUT),1)
 	CFLAGS  += -DENABLE_CUSTOM_MENU_LAYOUT
 endif
 
+ifeq ($(ENABLE_LITE_SIZE_OPT),1)
+	CFLAGS  += -DENABLE_LITE_SIZE_OPT
+endif
+
 LDFLAGS =
 LDFLAGS += -z noexecstack -mcpu=cortex-m0 -nostartfiles -Wl,-T,firmware.ld -Wl,--gc-sections
 
@@ -410,9 +419,9 @@ ifeq ($(DEBUG),1)
 endif
 
 INC =
-INC += -I $(TOP)
-INC += -I $(TOP)/external/CMSIS_5/CMSIS/Core/Include/
-INC += -I $(TOP)/external/CMSIS_5/Device/ARM/ARMCM0/Include
+INC += -I"$(TOP)"
+INC += -I"$(TOP)/external/CMSIS_5/CMSIS/Core/Include/"
+INC += -I"$(TOP)/external/CMSIS_5/Device/ARM/ARMCM0/Include"
 
 LIBS =
 
@@ -426,21 +435,12 @@ else ifneq (, $(shell $(WHERE) python3))
     MY_PYTHON := python3
 endif
 
-ifdef MY_PYTHON
-    HAS_CRCMOD := $(shell $(MY_PYTHON) -c "import crcmod" 2>&1)
-endif
-
 all: $(TARGET)
 	$(OBJCOPY) -O binary $< $<.bin
 
 ifndef MY_PYTHON
 	$(info )
 	$(info !!!!!!!! PYTHON NOT FOUND, *.PACKED.BIN WON'T BE BUILT)
-	$(info )
-else ifneq (,$(HAS_CRCMOD))
-	$(info )
-	$(info !!!!!!!! CRCMOD NOT INSTALLED, *.PACKED.BIN WON'T BE BUILT)
-	$(info !!!!!!!! run: pip install crcmod)
 	$(info )
 else
 	-$(MY_PYTHON) fw-pack.py $<.bin $(AUTHOR_STRING) $(VERSION_STRING) $<.packed.bin
