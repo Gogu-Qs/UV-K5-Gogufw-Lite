@@ -4,6 +4,8 @@
 /firmware.bin
 /firmware.hex
 /firmware.packed.bin
+/GOGUFW_LITE_UV-K5_*.bin
 /GOGUFW_LITE_K5_*TEST*.bin
 /GOGUFW_LITE_K5_*TEST*.packed.bin
 /compiled-firmware/
+.DS_Store
